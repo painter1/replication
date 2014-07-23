@@ -6,6 +6,7 @@ import urllib2
 import sys
 import logging
 import copy
+from pprint import pprint
 logging.basicConfig(level=logging.DEBUG)
 #jfp was log = logging.getLogger(__name__)
 p2plog = logging.getLogger('p2p')
@@ -153,8 +154,9 @@ E.g. del_defaults('institute','model')"""
         #p2plog.debug("jfp request=%s",request)
         #print "jfp raw search request=",request
         response = json.load(urllib2.urlopen(request, None,  self._time_out))
-        # p2plog.debug("jfp response=%",response)
-        #print "jfp raw search response=",response
+        #p2plog.debug("jfp response=%",response)
+        #print "jfp raw search response="
+        #pprint(response['response'])
 
         return response
 
@@ -162,7 +164,6 @@ E.g. del_defaults('institute','model')"""
         """Constructs a P2P Search API from the constraint passed and return just the response
 (no headers). Default type=Dataset."""
         query = self.__constraints_to_str(constraints, type=type) 
-        #print "jfp query=",query
         return self.raw_search(query)['response']
 
     def get_datasets_names(self, batch_size=__MAX_RESULTS, **constraints):
@@ -172,6 +173,9 @@ while calling this method"""
             del constraints['fields']
         datasets = set([(d['master_id'], int(d['version'])) for d in self.datasets(
                         fields='master_id,version',batch_size=batch_size,**constraints)])
+# ...normal jfp testing...
+#        datasets = set([(d['instance_id'], int(d['version'])) for d in self.datasets(
+#                        fields='instance_id,version',batch_size=batch_size,**constraints)])
         return datasets
 
     def get_datasets(self, **constraints):
@@ -179,14 +183,15 @@ while calling this method"""
 run out of memory if too many dataset are tried to be retireved. use limit=N to get
 just the first "N" records."""
 
-        return [d for d in self.datasets(**constraints)]
+        dsets = [d for d in self.datasets(**constraints)]
+        return dsets
 
     def datasets(self, batch_size=__MAX_RESULTS, **constraints):
         """returns a generator iterating thorugh the complete resulting docs.
-batch_size := defines the size of the retrieved batch
-limit := limits the total number of returned docs
+           batch_size := defines the size of the retrieved batch
+           limit := limits the total number of returned docs
 
-all other solar constraints apply"""
+           all other solar constraints apply"""
         #if we have a limit use it also here.
         max_items = sys.maxint
         if 'limit' in constraints:
@@ -207,7 +212,7 @@ all other solar constraints apply"""
             p2plog.error( "In datasets(), exception %s\nsearching on %s"%\
                           (e,constraints) )
             print "ERROR: In datasets(), exception %s\nsearching on %s"%\
-                          (e,constraints) )
+                          (e,constraints)
             result = { 'numFound':0, 'docs':[] }
 
         total = min(max_items, result['numFound'])

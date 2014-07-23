@@ -1,8 +1,8 @@
 #!/usr/local/cdat/bin/python
 """Manages replication"""
-from replication.model import p2p
-from replication.model import replica_db
-from replication.model import catalog
+from model import p2p
+from model import replica_db
+from model import catalog
 from urllib2 import URLError
 import logging
 import re
@@ -75,7 +75,7 @@ The datasets returned will all have latest=True."""
         basic_unit = 'model'
         #print "jfp search=",search
         #jfp normal: potential_models = self.p2p.get_facets(basic_unit, distrib=True, replica=False,
-        #                     latest=True, query="-data_node:*%s" % self.node_domain, **search)[basic_unit]
+        #               latest=True, query="-data_node:*%s" % self.node_domain, **search)[basic_unit]
         potential_models = self.p2p.get_facets(basic_unit, distrib=True, replica=False,
                  latest=True, query="-data_node:*%s" % self.node_domain, **search)[basic_unit]
         llnl_no_hyphen = False
@@ -152,8 +152,9 @@ The datasets returned will all have latest=True."""
                 # It seems to ask what datasets exist at LLNL.
                 already_replicated = set([])
             else:
-                already_replicated = self.p2p.get_datasets_names(model=model, distrib=False,
-                                      query="data_node:*%s" % self.node_domain, latest=True, **lsearch)
+                already_replicated = self.p2p.get_datasets_names(
+                    model=model, distrib=False,
+                    query="data_node:*%s" % self.node_domain, latest=True, **lsearch)
             remote.update(all_remote - already_replicated)
 
         return remote
@@ -193,7 +194,7 @@ The datasets returned will all have latest=True."""
         db_datasets = self.replicas.query(replica_db.ReplicaDataset.name, 
                                           replica_db.ReplicaDataset.version).all()
         # <<< should filter this according to search <<<
-        print "jfp in find_withdrawn, search=",search
+        #print "jfp in find_withdrawn, search=",search
         # crude, inflexible (only CMIP5 DRS) but easily coded substitute for filtering
         # (instead of all()) db_datasets:
         drsdict = {'project':0, 'product':1,'institute':2, 'model':3, 'experiment':4,
@@ -260,7 +261,7 @@ The datasets returned will all have latest=True."""
         if name_for_obsolete in qname:
             for i in range(99):
                 name_for_obsolete = "old_"+str(i)+'_'+str(rd.version)+'_'+rd.name
-                print "jfp next name_for_obsolete=",name_for_obsolete
+                #print "jfp next name_for_obsolete=",name_for_obsolete
                 if not name_for_obsolete in qname: break
             if i>=98:
                 raise Exception("Can't build a name for obsolete version of dataset %s",rd.name)
@@ -322,7 +323,7 @@ The datasets returned will all have latest=True."""
         self.replicas.delete(rd)
         self.replicas.commit()
 
-    def ingest_dataset(self, datasets, drs_translate=True, force=False):
+    def ingest_dataset(self, datasets, drs_translate=True, force=False, use_original_server=True):
         """Ingests the given (dataset, version) tuple into the replica_db.
 This implies extracting the metadata from the catalog.
 We expect the dataset to be the latest version (i.e., latest=True)"""
@@ -334,13 +335,19 @@ We expect the dataset to be the latest version (i.e., latest=True)"""
         #make sure this is setup if we are going to use it
         if drs_translate: self.__setup_drs_writer()
 
-        search = {'fields': 'url,size,number_of_files,index_node', 'replica':False}
+        if use_original_server:
+            search = {'fields': 'url,size,number_of_files,index_node', 'replica':False}
+        else:  # use a replica server
+            search = {'fields': 'url,size,number_of_files,index_node', 'replica':True}
+        #>>>>> replica:True gets only replicas, replica:False gets only original.  We want both!
+        #>>>>> In fact, we want to find all servers for every file!
         for dataset, version in datasets:
             log.info("Processing  dataset %s (%s)", dataset, version)
             print "Processing  dataset %s (%s)" % (dataset, version) #jfp
 
             if version:
                 res = self.p2p.get_datasets(master_id=dataset, version=version, **search)
+                #jfp test res = self.p2p.get_datasets(instance_id=dataset, version=version, **search)
             else:
                 #just get the latest
                 res = self.p2p.get_datasets(master_id=dataset, latest=True, **search)
@@ -348,17 +355,26 @@ We expect the dataset to be the latest version (i.e., latest=True)"""
                 log.error("Invalid number of results returned!\n->%s<-", \
                           self.p2p.show(res, return_str=True)) #jfp added res as a bugfix
                 if not res: continue
-            res = res[0]
-        
-            catalog_url = self.p2p.extract_catalog(res)
+            for res0 in res:
+                print "jfp looking at res0=",res0
+                catalog_url = self.p2p.extract_catalog(res0)
+                if catalog_url:
+                    res = res0
+                    break
+                #>>>>> Here we have just one result for one catalog url.  Why not get them all?? <<<<<<<
+            print "jfp catalog_url=",catalog_url
             if not catalog_url:
                 log.error("Skipping. Can't find catalog")
                 continue
-            print "jfp catalog_url=",catalog_url
             metadata = catalog.getDatasetMetadata(catalog_url)
             if not metadata:
                 log.error("Skipping. Can't extract metadata ")
                 continue
+            facc = [f['access'] for f in metadata['files']]  #jfp debug
+            faccflat = [a for fa in facc for a in fa] #jfp debug
+            #print "jfp non-pcmdi cl file accesss=",\
+            #      [ a for a in faccflat if a['url'].find('pcmdi')<0 and a['url'].find('/cl/')>0]
+
         
             #now we have all we need.
         
@@ -423,7 +439,6 @@ We expect the dataset to be the latest version (i.e., latest=True)"""
             # TO DO (jfp) make use of previous_files - saves a lot of downloading
             # BUT maybe current_files (see below) does the same job
             print "jfp get_the_new_version=",get_the_new_version,"  version=",version
-            # print "jfp metadata=",metadata
             if get_the_new_version:
                 #...jfp added the lines above and introduced variable rdnew...
                 rdnew = replica_db.ReplicaDataset(name=dataset,version=version, 
@@ -485,7 +500,6 @@ We expect the dataset to be the latest version (i.e., latest=True)"""
                         if key in current_files:
                             #Add this accesses and transform local
                             for url_code in file['url']:
-                                print "jfp url_code=",url_code
                                 url, mime, url_type = url_code.split('|')
                                 for pattern in self.LOCAL_TRANSLATION:
                                     if pattern.search(url):
@@ -529,7 +543,8 @@ We expect the dataset to be the latest version (i.e., latest=True)"""
                     oldfile = oldfiles[0]
                     if oldfile.status>=replica_db.STATUS.RETRIEVED:
                         continue
-                    if oldfile.checksum==file['checksum']  and\
+                    if oldfile.status>=replica_db.STATUS.VERIFYING and\
+                       oldfile.checksum==file['checksum']  and\
                        oldfile.checksum_type==file['checksum_type'] and\
                        oldfile.size==long(file['size']):
                         continue
@@ -613,7 +628,8 @@ def main(argv=None):
         args, lastargs = getopt.getopt(argv, "f:h",
                                        ['help','facet=','list-missing', 'list-withdrawn',
                                         'forget-withdrawn', 'list-remote', 'ingest', 'force-ingest',
-                                        'default-search'])
+                                        'default-search',
+                                        'use-original-server', 'use-replica-servers'])
     except getopt.error:
         print sys.exc_info()[:3]
         return 1
@@ -622,6 +638,7 @@ def main(argv=None):
     list_missing = list_withdrawn = list_remote = forget_withdrawn = ingest = force_ingest = False
     #facets = copy.deepcopy(Manager.BASIC_SEARCH)
     facets = {}
+    use_original_server = True
     #parse arguments *!!!*
     for flag, arg in args:
         if flag=='--list-withdrawn':      #List withdrawn datasets
@@ -644,13 +661,21 @@ def main(argv=None):
             facets[facet] = value
         elif flag=='--default-search':   #Use the default search (cmip5, output1 and predefined sets of time-frequencies and experiments are hard coded)
             facets = dict(facets, **copy.deepcopy(Manager.BASIC_SEARCH))
+        elif flag=='--use-original-server':
+            use_original_server=True
+        elif flag=='--use-replica-servers':
+            use_original_server=False
 
 
     #jfp: checking multiple nodes should be completely unnecessary, but I'll leave that
     # here until I'm finished testing...
     # nodedoms = [['esgf-data.dkrz.de','dkrz.de'],['pcmdi9.llnl.gov','llnl.gov'],['esgf.nccs.nasa.gov','nasa.gov']]
     print "jfp in main facets=",facets
-    nodedoms = [['pcmdi9.llnl.gov','llnl.gov']]
+    if use_original_server:
+        nodedoms = [['pcmdi9.llnl.gov','llnl.gov']]
+    else:   # The way the inner searches work, they'll only pick up one replica per ESGF node.
+            # So query multiple nodes.
+        nodedoms = [['pcmdi9.llnl.gov','llnl.gov'],['esgf-data.dkrz.de','dkrz.de']]
     for node,node_domain in nodedoms:
         print "jfp node=",node,"node_domain=",node_domain
         mng = Manager(local_node=node,node_domain=node_domain)
@@ -672,10 +697,12 @@ def main(argv=None):
             mng.forget_withdrawn( search=facets )
 
         if ingest:
-            mng.ingest_dataset(list(mng.find_missing(search=facets)))
+            mng.ingest_dataset( list(mng.find_missing(search=facets)),
+                                use_original_server=use_original_server )
 
         if force_ingest:
-            mng.ingest_dataset(list(mng.find_remote_datasets(search=facets,force=True)))
+            mng.ingest_dataset( list(mng.find_remote_datasets(search=facets,force=True)),
+                                use_original_server=use_original_server )
 
     return 0
 
