@@ -162,6 +162,7 @@ config = loadConfig(None)
 archive_root0 = config.get('replication', 'archive_root0') # on gdo2: /cmip5/data
 archive_root1 = config.get('replication', 'archive_root1') # on gdo2: /css01-cmip5/data
 archive_root2 = config.get('replication', 'archive_root2') # on gdo2: /css02-cmip5/data
+archive_root3 = config.get('replication', 'archive_root3') # on gdo2: /css02-cmip5/cmip5/data
 
 #temporal destinations of files and other data while completing the datasets
 replica_root0 = config.get('replication', 'replica_root0')   # on gdo2: /cmip5/scratch
@@ -227,7 +228,8 @@ class ReplicaFile(Base, DAO):
     def getFinalLocations(self):
         return [ os.path.join(archive_root0, self.abs_path),
                  os.path.join(archive_root1, self.abs_path),
-                 os.path.join(archive_root2, self.abs_path) ]
+                 os.path.join(archive_root2, self.abs_path),
+                 os.path.join(archive_root3, self.abs_path) ]
 
     def getDownloadLocation(self):
         if   self.abs_path.find("/BCC/")>0 or\
@@ -514,9 +516,9 @@ def fill_replica_db(allow_empty_md5=True):
                     missing_chksum = []
                     for file in dsver.files:
                         path = file.location[len(archive_root0):]
-                        #...jfp: this line is wrong if there are two archive locations (archive_root0
-                        # and archive_root2, but it doesn't matter because this whole section doesn't
-                        # get exercised.
+                        #...jfp: this line is wrong if there are four archive locations (archive_root0
+                        # through archive_root3, but it doesn't matter because this whole section
+                        # doesn't get exercised.
                         if path[0] == '/': path = path[1:]
                         filename = path[path.rindex('/')+1:]
                         path = path[:-len(filename)-1]
@@ -854,6 +856,38 @@ repos = { 'badc':
     { 'id' : 9, 'file_mod' : lambda file : 'gsiftp://vesg.ipsl.fr:2811//esg_dataroot/' + file.abs_path}
 }
     
+server_priority = {
+    'local':7, # local and llnl should be changed to 0 once we've restored lost data
+    'llnl':7,
+    'dkrz':2,
+    'badc':2, 'ceda':2,  # BADC
+    'ncar':2, 'ucar':2,
+    'default':3,
+    'gfdl':3,      # USA
+    'nasa':3,      # USA
+    'norstore':3, 'norstore-trd-bio1':3,     # Norway
+    'dias':3, 'dias-esg-rp':3, 'u-tokyo':3,  # Japan
+    'cnrm':3, 'cnrm-game-meteo':3,           # France
+    'nci':5,       # Australia
+    'bcc':5, 'bcccsm':5, # China
+    'bnu':5,       # China
+    'lasg':6,      # China
+    'ichec':6, 'e-inis':6  # Ireland
+    }
+
+def url_priority(url):
+    """Identifies the server name in a url, looks up its priority in the dict server_priority,
+    and returns the priority.  Priorities range from 0 (highest) to 7 (lowest)."""
+    hostport = url.split('/')[2]   # e.g. "pcmdi7.llnl.gov:2811"; port number only for gsiftp.
+    host = hostport.split(':')[0]  # e.g. "bmbf-ipcc-ar5.dkrz.de",
+    # "http://dias-esg-nd.tkl.iis.u-tokyo.ac.jp",  "cmip-dn1.badc.rl.ac.uk"
+    hw = host.split('.')
+    for w in hw:
+        if w in server_priority.keys():
+            return server_priority[w]
+    print "url_priority found no matches for host=",host  # for debugging during development
+    return server_priority['default']
+    
 def create_repo_list(datasets, repo=None, output=None, skip_existing=True, type='HTTPServer'):
     if not output: mapfile = sys.stdout
     else: mapfile = open(output, 'w')
@@ -880,12 +914,15 @@ def create_repo_list(datasets, repo=None, output=None, skip_existing=True, type=
             if skip_existing and ( f.status >= STATUS.VERIFYING ): 
                 continue
             url = None
-            for a in f.access:  # added by jfp.  Always use the local copy if there is one.
-                if a.type == 'local':   # file:///cmip5/scratch/...
-                    path = a.url[7:]
-                    if os.path.isfile(path) and os.path.getsize(path)==f.size:
-                        url = a.url
-                        break
+            urls_bypri = {0:[],1:[],2:[],3:[],4:[],5:[],6:[],7:[]}
+            if False:
+                #jfp temporarily disable this due to lost published files at PCMDI...
+                for a in f.access:  # added by jfp.  Always use the local copy if there is one.
+                    if a.type == 'local':   # file:///cmip5/scratch/...
+                        path = a.url[7:]
+                        if os.path.isfile(path) and os.path.getsize(path)==f.size:
+                            url = a.url
+                            break
             if url is None:  #jfp
                 if repo and 'file_mod' in repo:
                     try:
@@ -896,21 +933,17 @@ def create_repo_list(datasets, repo=None, output=None, skip_existing=True, type=
                 else:
                     for a in f.access:
                         if a.type == type:
-                            url = a.url
+                            pri = url_priority(a.url)
+                            urls_bypri[pri].append(a.url)
+                    for pri in range(8):
+                        if len(urls_bypri[pri])>0:
+                            url = urls_bypri[pri][0]
                             break
             if url:
-                if url.find('ipsl.jussieu.fr/')>0:
-                    # ugly special-casing to undo an error somewhere in the gateway system
-                    url = url.replace('.jussieu.','.')
-                #jfp was dlfiles_dir = files_dir
                 if f.status==STATUS.ERROR:
                     flags=-1
                 else:
                     flags=0
-                #jfp no longer use dlfilesdir...
-                #mapfile.write('%s\t%s\t%s\t%s\t%s\t%s\n' %\
-                #                  (url, os.path.join(dlfiles_dir2, f.abs_path),\
-                #                       f.size, f.checksum, f.checksum_type, flags))
                 mapfile.write('%s\t%s\t%s\t%s\t%s\t%s\n' %\
                                   (url, f.getDownloadLocation(),\
                                        f.size, f.checksum, f.checksum_type, flags))
@@ -1171,14 +1204,17 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
         dlroot0 = files_dir0     # on gdo2: /cmip5/scratch
         dlroot1 = files_dir1     # on gdo2: /css01-cmip5/scratch
         dlroot2 = files_dir2     # on gdo2: /css02-cmip5/scratch
+        dlroot3 = "/No/such/path"
         pubroot0= archive_root0  # on gdo2: /cmip5/data
         pubroot1= archive_root1  # on gdo2: /css01-cmip5/data
         pubroot2= archive_root2  # on gdo2: /css02-cmip5/data
+        pubroot3= archive_root3  # on gdo2: /css02-cmip5/cmip5/data
     else:
         # Note: the pcmdipub code is becoming obsolete as we now check published directores in all cases.
         dlroot0 = archive_root0  # On gdo2, for PCMDI-published data
         dlroot1 = archive_root1  # on gdo2: /css01-cmip5/data
         dlroot2 = archive_root2  # On gdo2, /css02-cmip5/data
+        dlroot3 = archive_root3  # On gdo2, /css02-cmip5/cmip5/data
     db=getReplicaDB()
     #datasets = db.query(ReplicaDataset).filter(ReplicaDataset.status==STATUS.DOWNLOADING).all()
     if not pcmdipub:
@@ -1204,9 +1240,7 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
         matching_datasets = query1.all()
 
     #jfp was for dataset in datasets.filter(ReplicaDataset.name.like(dataset_match)).all():
-    print "jfp matching_datasets=",matching_datasets
     for dataset in matching_datasets:
-        print "jfp dataset=",dataset
         # If checksums were requested but can't be done, checksums_done will be switched to False
         checksums_done = do_checksums
         idurls = None
@@ -1220,7 +1254,7 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
         #    rmlog.info( "Not processing %s" % dataset.name )
         #    continue
         rmlog.info( "Processing %s" % dataset.name )
-        max_proc = 10
+        max_proc = 16
         procs= []
         ds_incomplete = False
         if len(dataset.files)!=dataset.filecount:
@@ -1238,17 +1272,18 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
                 continue
 
             abs_path = file.abs_path
-            print "jfp abs_path=",abs_path
 
             #jfp new code:
             location = None
             candidate_pcmdi_paths = []
-            candidate_drs_paths = [ (os.path.join(dlroot2,abs_path),False),
+            candidate_drs_paths = [ (os.path.join(dlroot3,abs_path),False),
+                                    (os.path.join(dlroot2,abs_path),False),
                                     (os.path.join(dlroot1,abs_path),False),
                                     (os.path.join(dlroot0,abs_path),False),
                                     (os.path.join(pubroot0,abs_path),True),
                                     (os.path.join(pubroot1,abs_path),True),
-                                    (os.path.join(pubroot2,abs_path),True) ]
+                                    (os.path.join(pubroot2,abs_path),True),
+                                    (os.path.join(pubroot3,abs_path),True) ]
             for path,pub in candidate_drs_paths:
                 #print "jfp trying path=",path,pub
                 if path and os.path.isfile(path) and os.path.getsize(path)>0:
