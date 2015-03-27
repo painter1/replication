@@ -141,6 +141,7 @@ class __ftpProtocol(BaseProtocol):
 
     def _createProc(self, target_file, start = 0, end = None, wget_args = '', **params):
         wget_args += ' --no-check-certificate'
+        wget_args += '  secure-protocol=TLSv1' #jfp don't use SSLv3
         wget_args += ' --certificate {0} --private-key {0} --ca-directory {1}'.format(*self.getSecurity())
         if end:
             log.info('End set to %s but wget cannot handle this.'%(end))
@@ -268,9 +269,11 @@ class __HTTPProtocol_wget(BaseProtocol):
         self.cacert = None
 
     def _createProc(self, target_file, start = 0, end = None, wget_args = '', **params):
+        wget_args += ' --secure-protocol=TLSv1'
         wget_args += ' --no-check-certificate'
         wget_args += ' --certificate {0} --private-key {0} --ca-directory {1}'.format(*self.getSecurity())
         wget_args += ' --progress=dot'   #jfp: less output to nohup.out
+        wget_args += '  secure-protocol=TLSv1' #jfp don't use SSLv3
         if end:
             log.info('End set to %s but wget cannot handle this.'%(end))
         if start > 0:
