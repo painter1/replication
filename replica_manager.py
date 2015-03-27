@@ -444,7 +444,6 @@ def fill_replica_db(allow_empty_md5=True):
             #to cancel commit if some error appear
             commit_changes = True
 
-            print "jfp dataset_name=",dataset_name
             #we will store here all files from last version (if any)
             previous_files = {}
 
@@ -863,11 +862,15 @@ server_priority = {
     'badc':2, 'ceda':2,  # BADC
     'ncar':2, 'ucar':2,
     'default':3,
+    'nersc':3,      # USA
     'gfdl':3,      # USA
     'nasa':3,      # USA
     'norstore':3, 'norstore-trd-bio1':3,     # Norway
     'dias':3, 'dias-esg-rp':3, 'u-tokyo':3,  # Japan
     'cnrm':3, 'cnrm-game-meteo':3,           # France
+    'ipsl':3,      # France
+    'cccma':3,     # Canada
+    'cmcc':3,      # Italy
     'nci':5,       # Australia
     'bcc':5, 'bcccsm':5, # China
     'bnu':5,       # China
@@ -1267,23 +1270,26 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
             #print "jfp file=",file.abs_path
             #if file.status>=STATUS.RETRIEVED or file.status==STATUS.MULTIPLE_ERRORS:
             # Even retrieved files are worth checking if they might have been published...
-            if file.status>=STATUS.FINAL_DIR or file.status==STATUS.MULTIPLE_ERRORS:
-                #skip files we have already previously checked sufficiently
+            if file.status==STATUS.MULTIPLE_ERRORS:
+                #skip files which have failed so much it's not worth another look
                 continue
+            #if file.status>=STATUS.FINAL_DIR:
+            #    #skip files which have already passed
+            #    continue
 
             abs_path = file.abs_path
 
             #jfp new code:
             location = None
             candidate_pcmdi_paths = []
-            candidate_drs_paths = [ (os.path.join(dlroot3,abs_path),False),
-                                    (os.path.join(dlroot2,abs_path),False),
-                                    (os.path.join(dlroot1,abs_path),False),
-                                    (os.path.join(dlroot0,abs_path),False),
-                                    (os.path.join(pubroot0,abs_path),True),
+            candidate_drs_paths = [ (os.path.join(pubroot0,abs_path),True),
                                     (os.path.join(pubroot1,abs_path),True),
                                     (os.path.join(pubroot2,abs_path),True),
-                                    (os.path.join(pubroot3,abs_path),True) ]
+                                    (os.path.join(pubroot3,abs_path),True),
+                                    (os.path.join(dlroot3,abs_path),False),
+                                    (os.path.join(dlroot2,abs_path),False),
+                                    (os.path.join(dlroot1,abs_path),False),
+                                    (os.path.join(dlroot0,abs_path),False) ]
             for path,pub in candidate_drs_paths:
                 #print "jfp trying path=",path,pub
                 if path and os.path.isfile(path) and os.path.getsize(path)>0:
@@ -1309,8 +1315,9 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
             if (not location) or (not os.path.isfile(location)) or\
                (os.path.isfile(location) and os.path.getsize(location)==0) :
                 #file still not downloaded, or we're looking in the wrong place
-                if file.status==STATUS.VERIFYING:  # error in database, I've seen it (jfp)
-                    # print "jfp can't find file",location
+                if file.status==STATUS.VERIFYING or file.status>=STATUS.RETRIEVED:
+                    # error in database, I've seen it (jfp)
+                    print "can't find file",location
                     file.status = STATUS.DOWNLOADING
                 ds_incomplete = True
                 #jfp too common to be interesting (I frequently run this on incomplete dasets)
@@ -1418,7 +1425,6 @@ def verify_datasets(skip_hardlinks=False,do_checksums=True,pcmdipub=False):
                     # version from checksums.
 
             #check checksum
-            #print "jfp location=",location
             if file.checksum_type == 'md5' or file.checksum_type=='MD5':
                 if len(procs) >= max_proc:
                     #we are not refering to the current file, but some other
