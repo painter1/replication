@@ -268,6 +268,8 @@ return {facet:{facet_value:count}}"""
         """Extract the catalog from this json returned info. Only 1 cataog is expected"""
         if 'url' in dictio:
             result = [ e.split('.xml')[0]+'.xml' for e in dictio['url'] if e[-7:] == 'Catalog']
+            if result==[]:
+                result = [ e.split('.xml')[0]+'.xml' for e in dictio['url'] if e[-7:] == 'THREDDS']
             if result and len(result) == 1:
                 return result[0]
             else:
