@@ -11,7 +11,7 @@ def md5( filename ):
     # 3.6 seconds, but /opt/sfw/bin/md5sum took 10.0 seconds.  As the core code of
     # each is probably written in C, this probably means md5sum does Sun I/O poorly.
     md5 = hashlib.md5()
-    with open(filename,'rb') as f: 
+    with open(filename,'rb') as f:
         for chunk in iter(lambda: f.read(256*md5.block_size), ''): 
             md5.update(chunk)
     return md5.hexdigest()

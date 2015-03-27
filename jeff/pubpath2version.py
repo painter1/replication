@@ -174,8 +174,11 @@ def pubpath2version(pubpath,idurls=None):
         return None
     abs_path = '/'.join(sppath[3:])
     dataset = '.'.join(sppath[3:12])
-    if idurls==None:
+    if idurls is None:
         idurls = get_idurls_from_dataset(dataset)
+    if idurls is None:
+        print "cannot find urls for files in dataset",dataset
+        return None
 
     idu = [(a,c) for (a,c) in idurls if c.find(abs_path)>-1 ]
 
