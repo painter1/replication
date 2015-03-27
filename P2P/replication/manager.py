@@ -10,6 +10,7 @@ import time
 import os,os.path
 import sys
 import pymd5
+from drslib.translate import TranslationError
 
 log = logging.getLogger(__name__)
 log.addHandler( logging.FileHandler('manager.log') )
@@ -527,7 +528,20 @@ We expect the dataset to be the latest version (i.e., latest=True)"""
                         file_name=url.split('/')[-1]
                         break
                 if not file_name: raise Exception("Can't find file name")
-                abs_path = self.drs_writer.get_file_path(file_name, version, dataset)
+                try:
+                    abs_path = self.drs_writer.get_file_path(file_name, version, dataset)
+                except TranslationError as e:
+                    print "drslib cannot parse file name=",file_name
+                    if file_name.find('EC-EARTH')>0:
+                        # One of the two institutes publishing EC-EARTH model output is ICHEC.
+                        # ICHEC is known to have published bad file names.
+                        # They can't be parsed automatically.
+                        print "will ignore the file and continue"
+                        continue
+                    else:
+                        # Otherwise, an error may indicate something which needs to be fixed in
+                        # drslib, or in ~/.metaconfig.conf .
+                        raise e
 
                 # added by jfp....  Let's not wipe out information on an existing file, if
                 # the newly harvested file is identical, and we have it!
