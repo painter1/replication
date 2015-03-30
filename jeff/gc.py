@@ -1,3 +1,5 @@
+#!/usr/apps/esg/cdat6.0a/bin/python
+
 # Simple garbage collector for replicated CMIP5 data.
 # This moves data to another directory.  Deletion should not happen until someone
 # has looked over the purportedly obsolete data.
@@ -158,14 +160,18 @@ def gc( topdir, facetsdir ):
             
 if __name__ == '__main__':
     if len( sys.argv ) > 1:
+        # e.g.
+        # gc.py /css01-cmip5/scratch/cmip5/output1/LASG-CESS/FGOALS-g2/amip/mon/atmos/Amon/r1i1p1
+        # Note that there should be a full directory path down to the ensemble, and no farther.
+        # But wildcards are allowed.
         srcpath = sys.argv[1]
-        scrachloc = srcpath.find('/scratch/')
+        scratchloc = srcpath.find('/scratch/')
         topdir = srcpath[0:scratchloc]
         facetsdir = srcpath[scratchloc+9:]
     else:
         print "running test problem"
-        print "If you don't want that, you should provide a source path.  * wildcards are allowed"
-        print "after /scratch/."
+        print "If you don't want that, you should provide a source path, from the root to the"
+        print "ensemble directory.  After /scratch/, * wildcards are allowed"
         topdir = '/css01-cmip5/'
         facets = [ 'cmip5', 'output1', 'LASG-CESS', 'FGOALS-g2', 'amip', 'mon', 'atmos', 'Amon', 'r1i1p1']
         facetsdir = apply( os.path.join, facets )
