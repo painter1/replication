@@ -4,6 +4,9 @@
 # This moves data to another directory.  Deletion should not happen until someone
 # has looked over the purportedly obsolete data.
 
+# >>>> TO DO, and this is important: check version numbers, and a file is bad
+# >>>> if we have a more recent version.
+
 # This script requires data to be organized as unpublished data usually is organized on CSS
 # at PCMDI.
 # That is, <anything>/scratch/<abs_path>/version/variable/file.nc and
@@ -18,8 +21,11 @@
 ## i.e. added to the dataset (But rarely a file may have been withdrawn without updating the
 ## dataset's version number.)
 ## It turned out that this aspect of it was equally easy either way.
-# Nevertheless, "moving good data" is superior because it makes it simple to reject files which
-# are in the wrong place, i.e. a directory which should have no files.
+# Nevertheless, "moving good data" is superior for two reasons.
+# 1. Most important, the "maybe bad" files are out of the regular dirctory hierarchy,
+# where we can look at them without interfering with normal operations.
+# 2. It makes it simple to reject files which are in the wrong place, i.e. a directory which
+# should have no files.
 #
 # Thus the first step is to move all the data to another directory.
 # Then move it back if it's "good", which means that it's in the database, and the database
@@ -31,10 +37,11 @@
 # should be deleted.
 # Note that any file in an unexpected location will be "possibly bad".
 
-import os, shutil, glob, sys
+import os, shutil, glob, sys, re
 import sqlalchemy
 from esgcet.config import loadConfig
 from sqlalchemy import sql
+from pprint import pprint
 
 def mv2scratch( filename, dirpath ):
     """Moves a file in a dirpath under scratch/_gc/ to the corresponding location under scratch/"""
@@ -65,7 +72,7 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     report = engine.execute(sql.text(sqlst)).fetchall()   # should be [(100,)] if status=100 e.g.
     print "abspath=",abspath,"report=",report
     if report==[]:
-        print "not found in database"
+        print abspath,"not found in database,\n  size=",os.path.getsize(filepath)
         return False
     status = report[0][0]
     if status>=20 or status<0: # normal
@@ -73,22 +80,28 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
         mv2scratch( filename, dirpath )
         return True
     else:
+        print abspath,"status=",status,"\n  size=",os.path.getsize(filepath)
         return False
 
-def gc_mvall( scratchdir, gcdir ):
+def gc_mvall( scratchdir ):
     """first step of gc, move all files from /scratch/ to /scratch/_gc/."""
-    print "scratchdir=",scratchdir
-    print "gcdir=",gcdir
-    if os.path.isdir(scratchdir):
-        if os.path.isdir(gcdir):
-            print "WARNING, gcdir %s already exists,\n will not move from scratchdir %s"%\
-                  (gcdir,scratchdir)
+    sdirs = glob.glob(scratchdir)
+    for scratchdir in sdirs:
+        gcdir = scratchdir.replace( '/scratch/', '/scratch/_gc/' )
+        print "scratchdir=",scratchdir
+        print "gcdir=",gcdir
+        if os.path.isdir(scratchdir):
+            if os.path.isdir(gcdir):
+                print "WARNING, gcdir %s already exists,\n will not move from scratchdir %s"%\
+                      (gcdir,scratchdir)
+            else:
+                shutil.move( scratchdir, gcdir )
         else:
-            shutil.move( scratchdir, gcdir )
-    else:
-        raise Exception("source directory %s doesn't exist"%scratchdir)
-    if not os.path.isdir(gcdir):
-        raise Exception("gcdir %s doesn't exist"%gcdir)
+            #raise Exception("source directory %s doesn't exist"%scratchdir)
+            print "WARNING", "source directory %s doesn't exist"%scratchdir
+            print "Nothing will be moved from scratch to scratch/_gs."
+        if not os.path.isdir(glob.glob(gcdir)[0]):
+            raise Exception("gcdir %s doesn't exist"%gcdir)
 
 def gc_mvgood( topdir, gcdir ):
     """second step of gc, move good files from /scratch/_gc/ to /scratch/."""
@@ -142,20 +155,56 @@ def delete_empty_dirs( dirwc ):
     """Clean-up: delete empty directories in dirwc, which may be wildcarded."""
     for dir in glob.glob( dirwc ):
         for dirpath,dirnames,filenames in os.walk(dir, topdown=False):
-            print "looking at",dirpath
             try:
-                print "removing",dirpath
                 os.rmdir(dirpath)
                 # os.rmdir removes a directory only if it's empty
-            except OSERROR:
+            except OSError:
                 pass
 
-def gc( topdir, facetsdir ):
+def check_facetsdir( topdir, facetsdir ):
+    """Checks whether facetsdir is like what we're expecting.
+    Prints out all the source scratch dirs, and requires confirmation from the user."""
+    print "jfp entering check_facetsdir",topdir,facetsdir
+    facets = [a for a in facetsdir.split('/') if len(a)>0]
+    if len(facets)!=9:
+        raise Exception("should have 9 facets, have %i in %s"%(len(facets),facets))
+    ensfacet = facets[-1]
+    matches = re.findall( 'r\d+i\d+p\d+', ensfacet )  # e.g. ['r1i12p2']
+    if len(matches)!=1 or matches[0]!=ensfacet:
+        raise Exception("% should be an ensemble facet, doesn't look like one"%ensfacet)
     scratchdir = os.path.join(topdir,'scratch/',facetsdir)
     gcdir = os.path.join(topdir,'scratch/_gc/',facetsdir)
-    gc_mvall( scratchdir, gcdir )
+    sdirs = glob.glob(scratchdir)
+    gdirs = glob.glob(gcdir)
+    if len(sdirs)==0:
+        if len(gdirs)==0:
+            raise Exception(
+                "There is no source directory matching %s\n and no target directory matching %s."%
+                (scratchdir,gcdir) )
+        else:
+            print "WARNING: There is no source directory matching %s."%scratchdir
+            print "   Nothing will be moved from scratch/ to scratch/_gc/,"
+            print "but we will try to move files the other way."
+    print "Data in these directories will be cleaned out, with possibly-bad files put"
+    print "  in a temporary .../scratch/_gc/... directory:"
+    pprint( sdirs )
+    if len(gdirs)>0:
+        print "These _gc directories already exist, and any good files in them will be moved to"
+        print "regular scratch directories:"
+        pprint( gdirs )
+    ok = raw_input("Is this ok? (Type y or n, and newline)")
+    if ok[0]!='y' and ok[0]!='Y':
+        raise Exception("Aborted by user.")
+
+def gc( topdir, facetsdir ):
+    print "entering gc topdir=",topdir
+    print "facetsdir=",facetsdir
+    check_facetsdir(topdir,facetsdir)
+    scratchdir = os.path.join(topdir,'scratch/',facetsdir)
+    gcdir = os.path.join(topdir,'scratch/_gc/',facetsdir)
+    gc_mvall( scratchdir )
     gc_mvgood( topdir, gcdir )
-    delete_empty_dirs( gcdir ) # For a full-scale cleanup, this should start with topdir/scratch/_gc
+    delete_empty_dirs( os.path.join(topdir,'scratch/_gc/') )
 
             
 if __name__ == '__main__':
