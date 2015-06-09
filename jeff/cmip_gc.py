@@ -4,9 +4,6 @@
 # This moves data to another directory.  Deletion should not happen until someone
 # has looked over the purportedly obsolete data.
 
-# >>>> TO DO, and this is important: check version numbers, and a file is bad
-# >>>> if we have a more recent version.
-
 # This script requires data to be organized as unpublished data usually is organized on CSS
 # at PCMDI.
 # That is, <anything>/scratch/<abs_path>/version/variable/file.nc and
@@ -43,6 +40,19 @@ from esgcet.config import loadConfig
 from sqlalchemy import sql
 from pprint import pprint
 
+goodfiles = []
+badfiles = []
+
+def listgood( filename ):
+    global badfiles
+    goodfiles.append(filename)
+    if filename in badfiles: badfiles.remove(filename)
+
+def listbad( filename ):
+    global badfiles
+    badfiles.append(filename)
+    if filename in goodfiles: goodfiles.remove(filename)
+
 def mv2scratch( filename, dirpath ):
     """Moves a file in a dirpath under scratch/_gc/ to the corresponding location under scratch/"""
     scpath = dirpath.replace('/scratch/_gc/','/scratch/',1)
@@ -52,6 +62,41 @@ def mv2scratch( filename, dirpath ):
     if not os.path.isdir(scpath):
         os.makedirs(scpath)
     shutil.move( oldpath, scpath )
+    listgood( filename )
+
+def abspath2vers( abspath ):
+    """Extracts the version directory from abspath, e.g. abspath=
+    'cmip5/output1/LASG-CESS/FGOALS-g2/amip/mon/atmos/Amon/r1i1p1/v2/rsutcs/rsutcs_Amon_FGOALS-g2_amip_r1i1p1_197901-198812.nc'.
+    Does not check whether it's a valid version."""
+    fdirs = abspath.split('/')
+    if len(fdirs)<=9:
+        return None
+    else:
+        return fdirs[9]
+
+def existing_versions( filename, abspath, dirpath, engine ):
+    """Identifies existing versions of a file for which the file has been verified.
+    This file's version and all the versions are returned; the list of all versions is
+    sorted.  If there is a problem identifying a version, then the first return value is None.
+    This is based on the replication database."""
+    vers = abspath2vers(abspath)
+    if not check_versiondir(vers):
+        print "WARNING: cannot find the version from abspath.  vers=",vers,"fdirs=",fdirs
+        return None,[]
+
+    ap_templ = abspath.replace(vers,'%')
+    # Do the Python equivalent of
+    # SELECT abs_path FROM replica.files WHERE status>=100 AND abs_path LIKE ap_templ;
+    sqlst = "SELECT abs_path FROM replica.files WHERE status>=100 AND abs_path LIKE '%s';"%ap_templ
+    report = engine.execute(sql.text(sqlst)).fetchall()
+    
+    verss = [ abspath2vers(ap[0]) for ap in report ]
+    verss.sort(reverse=True)
+    if all( map(check_versiondir, verss))==True:
+        return vers, verss
+    else:
+        print "WARNING, something didn't look like a version in", verss
+        return None,[]
 
 def mvgood2scratch( filename, abspath, dirpath, engine ):
     """Checks whether file identified by abspath is in the database, listed as present
@@ -60,7 +105,8 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     containing .../scratch/...
     Regardless of the database status, any zero-length file will be deleted.
     Returns True if the file was moved, False if it wasn't.
-    engine is an SQLAlchemy engine."""
+    engine is an SQLAlchemy engine.
+    The filename will be put in one of the lists goodfiles or badfiles."""
     filepath = os.path.join(dirpath,filename)
     if os.path.getsize(filepath)==0:
         os.remove(filepath)
@@ -73,14 +119,22 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     print "abspath=",abspath,"report=",report
     if report==[]:
         print abspath,"not found in database,\n  size=",os.path.getsize(filepath)
+        listbad(filename)
         return False
     status = report[0][0]
-    if status>=20 or status<0: # normal
-    #if True:  # testing
-        mv2scratch( filename, dirpath )
-        return True
+    if status>=20 or status<0:
+        # It looks like we should keep this.
+        vers,verss = existing_versions(filename, abspath, dirpath, engine )  # testing
+        if vers is not None and vers!=verss[0]:
+            print "abspath version",vers,"is older than",verss[0],"which we also have"
+            listbad(filename)
+            return False
+        else:
+            mv2scratch( filename, dirpath )
+            return True
     else:
         print abspath,"status=",status,"\n  size=",os.path.getsize(filepath)
+        listbad(filename)
         return False
 
 def gc_mvall( scratchdir ):
@@ -120,10 +174,10 @@ def gc_mvgood( topdir, gcdir ):
         # for files which failed a checksum.
         versiondirs = os.listdir( gcdsdir )  # should be version directories e.g. v20120913/
         for versd in versiondirs:
-            if not check_versiondir( versd ):
-                raise Exception("%s does not look like a version directory"%versd)
             verspath = os.path.join(gcdsdir,versd)
             if not os.path.isdir(verspath): continue
+            if not check_versiondir( versd ):
+                raise Exception("%s does not look like a version directory"%versd)
             vardirs = os.listdir(verspath)
             mvstatus = False  # True if any file in this dataset+version should be moved
                               # back to scratch/.
@@ -138,7 +192,8 @@ def gc_mvgood( topdir, gcdir ):
                         abspath = os.path.join( fac1dir, versd, vard, filename )
                         mvstatus = mvstatus or mvgood2scratch( filename, abspath, dirpath, engine )
             if mvstatus is True:
-                # A file was moved back to scratch, others in the same dataset+version should be moved.
+                # A file was moved back to scratch, others in the same dataset+version should be
+                # moved.
                 for vard in vardirs:
                     varpath = os.path.join(verspath,vard)
                     dirpath = varpath
@@ -187,7 +242,7 @@ def check_drsversiondir( versd ):
     v20121109 or 20121109.  Returns True or False."""
     if len(versd)<8 or len(versd)>9:
         return False
-    if len(versd==9) and versd[0]!='v':
+    if len(versd)==9 and versd[0]!='v':
         return False
     if len(versd)==9:
         versd = versd[1:]
@@ -200,7 +255,6 @@ def check_drsversiondir( versd ):
 def check_facetsdir( topdir, facetsdir ):
     """Checks whether facetsdir is like what we're expecting.
     Prints out all the source scratch dirs, and requires confirmation from the user."""
-    print "jfp entering check_facetsdir",topdir,facetsdir
     facets = [a for a in facetsdir.split('/') if len(a)>0]
     if len(facets)!=9:
         raise Exception("should have 9 facets, have %i in %s"%(len(facets),facets))
@@ -221,7 +275,7 @@ def check_facetsdir( topdir, facetsdir ):
             print "WARNING: There is no source directory matching %s."%scratchdir
             print "   Nothing will be moved from scratch/ to scratch/_gc/,"
             print "but we will try to move files the other way."
-    print "Data in these directories will be cleaned out, with possibly-bad files put"
+    print "Data in the following directories will be cleaned out, with possibly-bad files put"
     print "  in a temporary .../scratch/_gc/... directory:"
     pprint( sdirs )
     if len(gdirs)>0:
@@ -233,14 +287,22 @@ def check_facetsdir( topdir, facetsdir ):
         raise Exception("Aborted by user.")
 
 def gc( topdir, facetsdir ):
-    print "entering gc topdir=",topdir
-    print "facetsdir=",facetsdir
+    global badfiles
+    print "Entering CMIP gc with topdir=",topdir,"and"
+    print "  facetsdir=",facetsdir
     check_facetsdir(topdir,facetsdir)
     scratchdir = os.path.join(topdir,'scratch/',facetsdir)
     gcdir = os.path.join(topdir,'scratch/_gc/',facetsdir)
+
+    for root, directories, filenames in os.walk(scratchdir):
+        badfiles += filenames
+    print "jfp initially, badfiles=",badfiles
+
     gc_mvall( scratchdir )
     gc_mvgood( topdir, gcdir )
     delete_empty_dirs( os.path.join(topdir,'scratch/_gc/') )
+    print "good files, in /scratch/:", goodfiles
+    print "bad files, in /scratch/_gc/:", badfiles
 
             
 if __name__ == '__main__':
