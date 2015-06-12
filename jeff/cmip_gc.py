@@ -4,6 +4,10 @@
 # This moves data to another directory.  Deletion should not happen until someone
 # has looked over the purportedly obsolete data.
 
+# Before running this script, do a harvest (ingest) and run a verify to update the replication
+# database before running this script.  The reason is that this script rejects any data not
+# listed in the database.
+
 # This script requires data to be organized as unpublished data usually is organized on CSS
 # at PCMDI.
 # That is, <anything>/scratch/<abs_path>/version/variable/file.nc and
@@ -118,8 +122,30 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     report = engine.execute(sql.text(sqlst)).fetchall()   # should be [(100,)] if status=100 e.g.
     print "abspath=",abspath,"report=",report
     if report==[]:
-        print abspath,"not found in database,\n  size=",os.path.getsize(filepath)
         listbad(filename)
+        vers = abspath2vers(abspath)
+        if vers[0]=='v':  versp = vers[1:]
+        else:  versp = vers
+        print abspath,"not found in database, size=",os.path.getsize(filepath),"version=",versp
+
+        # Is another version in the database?
+        abspath_anyvers = abspath.replace('/'+vers+'/', '/%/')
+        sqlst = "SELECT abs_path,status FROM replica.files WHERE abs_path LIKE '%s';"\
+                % abspath_anyvers
+        report = engine.execute(sql.text(sqlst)).fetchall()   # e.g. [(path1,status1),...]
+        vershvs = [ abspath2vers(r[0]) for r in report if r[1]>=100 or r[1]==30 ]
+        versnhvs = [ abspath2vers(r[0]) for r in report if r[1]<30 ]
+        vershvs = list(set([v[1:] if v[0]=='v' else v for v in vershvs]))
+        versnhvs = list(set([v[1:] if v[0]=='v' else v for v in versnhvs]))
+        vershvs.sort()
+        versnhvs.sort()
+        if len(vershvs)>0 and vershvs[-1]>versp:
+            print "  We have a later version!"
+        if len(versnhvs)>0 and versnhvs[-1]>versp:
+            print "  There is a later version which we don't have."
+        print "  versions we have:", vershvs
+        print "  versions in database, we don't have:", versnhvs
+
         return False
     status = report[0][0]
     if status>=20 or status<0:
@@ -254,14 +280,9 @@ def check_drsversiondir( versd ):
 
 def check_facetsdir( topdir, facetsdir ):
     """Checks whether facetsdir is like what we're expecting.
-    Prints out all the source scratch dirs, and requires confirmation from the user."""
-    facets = [a for a in facetsdir.split('/') if len(a)>0]
-    if len(facets)!=9:
-        raise Exception("should have 9 facets, have %i in %s"%(len(facets),facets))
-    ensfacet = facets[-1]
-    matches = re.findall( 'r\d+i\d+p\d+', ensfacet )  # e.g. ['r1i12p2']
-    if len(matches)!=1 or matches[0]!=ensfacet:
-        raise Exception("% should be an ensemble facet, doesn't look like one"%ensfacet)
+    Prints out all the source scratch dirs, and requires confirmation from the user.
+    Returns a list of the source scratch directories."""
+
     scratchdir = os.path.join(topdir,'scratch/',facetsdir)
     gcdir = os.path.join(topdir,'scratch/_gc/',facetsdir)
     sdirs = glob.glob(scratchdir)
@@ -275,6 +296,18 @@ def check_facetsdir( topdir, facetsdir ):
             print "WARNING: There is no source directory matching %s."%scratchdir
             print "   Nothing will be moved from scratch/ to scratch/_gc/,"
             print "but we will try to move files the other way."
+    else:
+        # As a sanity check, does the last facet look like an ensemble, e.g. r1i12p2 ?
+        for sdir in sdirs: # e.g. sdir='/cmip5/scratch/cmip5/prod/inst/mod/exp/mon/atmos/Amon/r1i1p1
+            topdf = topdir.split('/')  # If topdir='/cmip5', topdf=['','cmip5']
+            facets = sdir.split('/')[1+len(topdf):] # The 1+ is for 'scratch/'
+            if len(facets)!=9:
+                raise Exception("should have 9 facets, have %i in %s"%(len(facets),facets))
+            ensfacet = facets[-1]
+            matches = re.findall( 'r\d+i\d+p\d+', ensfacet )  # e.g. ['r1i12p2']
+            if len(matches)!=1 or matches[0]!=ensfacet:
+                raise Exception("% should be an ensemble facet, doesn't look like one"%ensfacet)
+
     print "Data in the following directories will be cleaned out, with possibly-bad files put"
     print "  in a temporary .../scratch/_gc/... directory:"
     pprint( sdirs )
@@ -285,17 +318,21 @@ def check_facetsdir( topdir, facetsdir ):
     ok = raw_input("Is this ok? (Type y or n, and newline)")
     if ok[0]!='y' and ok[0]!='Y':
         raise Exception("Aborted by user.")
+    return sdirs
 
 def gc( topdir, facetsdir ):
     global badfiles
     print "Entering CMIP gc with topdir=",topdir,"and"
     print "  facetsdir=",facetsdir
-    check_facetsdir(topdir,facetsdir)
+    sdirs = check_facetsdir(topdir,facetsdir)
     scratchdir = os.path.join(topdir,'scratch/',facetsdir)
     gcdir = os.path.join(topdir,'scratch/_gc/',facetsdir)
 
-    for root, directories, filenames in os.walk(scratchdir):
-        badfiles += filenames
+    # This doesn't work because glob.glob() hasn't been called on scratchdir.
+    # It's also not necessary except for files which aren't in the expected places.
+    for sdir in sdirs:
+        for root, directories, filenames in os.walk(sdir):
+            badfiles += filenames
     print "jfp initially, badfiles=",badfiles
 
     gc_mvall( scratchdir )
