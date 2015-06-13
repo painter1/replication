@@ -5,8 +5,8 @@
 # has looked over the purportedly obsolete data.
 
 # Before running this script, do a harvest (ingest) and run a verify to update the replication
-# database before running this script.  The reason is that this script rejects any data not
-# listed in the database.
+# database before running this script.  The reason is that this script is based on comparing a file
+# with entries int he database.  In particular, it rejects any data not listed in the database.
 
 # This script requires data to be organized as unpublished data usually is organized on CSS
 # at PCMDI.
@@ -46,16 +46,25 @@ from pprint import pprint
 
 goodfiles = []
 badfiles = []
+whys = { 'good':0,
+         'not in database, no later version':0,
+         'not in database, have later version':0,
+         'not in database, do not have the later version':0,
+         'we have a later version':0,
+         'db status says we do not have it':0
+         }
 
 def listgood( filename ):
     global badfiles
     goodfiles.append(filename)
     if filename in badfiles: badfiles.remove(filename)
+    whys['good'] += 1
 
-def listbad( filename ):
+def listbad( filename, why ):
     global badfiles
-    badfiles.append(filename)
+    if filename not in badfiles: badfiles.append(filename)
     if filename in goodfiles: goodfiles.remove(filename)
+    whys[why] += 1
 
 def mv2scratch( filename, dirpath ):
     """Moves a file in a dirpath under scratch/_gc/ to the corresponding location under scratch/"""
@@ -122,7 +131,7 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     report = engine.execute(sql.text(sqlst)).fetchall()   # should be [(100,)] if status=100 e.g.
     print "abspath=",abspath,"report=",report
     if report==[]:
-        listbad(filename)
+        why = "not in database, "
         vers = abspath2vers(abspath)
         if vers[0]=='v':  versp = vers[1:]
         else:  versp = vers
@@ -141,10 +150,15 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
         versnhvs.sort()
         if len(vershvs)>0 and vershvs[-1]>versp:
             print "  We have a later version!"
-        if len(versnhvs)>0 and versnhvs[-1]>versp:
-            print "  There is a later version which we don't have."
+            why += "have later version"
+        elif len(versnhvs)>0 and versnhvs[-1]>versp:
+            print "  There is a later version which we do not have."
+            why += "do not have the later version"
+        else:
+            why += "no later version"
         print "  versions we have:", vershvs
-        print "  versions in database, we don't have:", versnhvs
+        print "  versions in database, we do not have:", versnhvs
+        listbad(filename, why)
 
         return False
     status = report[0][0]
@@ -153,14 +167,14 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
         vers,verss = existing_versions(filename, abspath, dirpath, engine )  # testing
         if vers is not None and vers!=verss[0]:
             print "abspath version",vers,"is older than",verss[0],"which we also have"
-            listbad(filename)
+            listbad(filename, "we have a later version")
             return False
         else:
             mv2scratch( filename, dirpath )
             return True
     else:
         print abspath,"status=",status,"\n  size=",os.path.getsize(filepath)
-        listbad(filename)
+        listbad(filename,"db status says we do not have it")
         return False
 
 def gc_mvall( scratchdir ):
@@ -333,13 +347,15 @@ def gc( topdir, facetsdir ):
     for sdir in sdirs:
         for root, directories, filenames in os.walk(sdir):
             badfiles += filenames
-    print "jfp initially, badfiles=",badfiles
+    print "jfp initially, badfiles=",badfiles,len(badfiles)
 
     gc_mvall( scratchdir )
     gc_mvgood( topdir, gcdir )
     delete_empty_dirs( os.path.join(topdir,'scratch/_gc/') )
-    print "good files, in /scratch/:", goodfiles
-    print "bad files, in /scratch/_gc/:", badfiles
+    print "good files, in /scratch/:", goodfiles, len(goodfiles)
+    print "bad files, in /scratch/_gc/:", badfiles, len(badfiles)
+    print "reasons for files being good or bad:"
+    pprint( whys )
 
             
 if __name__ == '__main__':
@@ -354,7 +370,7 @@ if __name__ == '__main__':
         facetsdir = srcpath[scratchloc+9:]
     else:
         print "running test problem"
-        print "If you don't want that, you should provide a source path, from the root to the"
+        print "If you do not want that, you should provide a source path, from the root to the"
         print "ensemble directory.  After /scratch/, * wildcards are allowed"
         topdir = '/css01-cmip5/'
         facets = [ 'cmip5', 'output1', 'LASG-CESS', 'FGOALS-g2', 'amip', 'mon', 'atmos', 'Amon', 'r1i1p1']
