@@ -47,9 +47,9 @@ from pprint import pprint
 goodfiles = []
 badfiles = []
 whys = { 'good':0,
-         'not in database, no later version':0,
-         'not in database, have later version':0,
-         'not in database, do not have the later version':0,
+         'not in database, but there is no known later version':0,
+         'not in database, obsolete, have latest version':0,
+         'not in database, obsolete, do not have the latest version':0,
          'we have a later version':0,
          'db status says we do not have it':0
          }
@@ -76,6 +76,19 @@ def mv2scratch( filename, dirpath ):
         os.makedirs(scpath)
     shutil.move( oldpath, scpath )
     listgood( filename )
+
+def mv2trash( filename, dirpath, trashdir, why ):
+    """Moves a file in dirpath under scratch/_gc/ to a corresponding location under
+    scratch/_gc/trashdir.
+    This lets you collect files of the same type of badness in the same place."""
+    nwpath = os.path.normpath( dirpath.replace('/scratch/_gc/', '/scratch/_gc/'+trashdir+'/') )
+    oldpath = os.path.join(dirpath,filename)
+    #newpath = os.path.join(scpath,filename)
+    print "moving from",oldpath,"\nto",nwpath
+    if not os.path.isdir(nwpath):
+        os.makedirs(nwpath)
+    shutil.move( oldpath, nwpath )
+    listbad( filename, why )
 
 def abspath2vers( abspath ):
     """Extracts the version directory from abspath, e.g. abspath=
@@ -149,32 +162,40 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
         vershvs.sort()
         versnhvs.sort()
         if len(vershvs)>0 and vershvs[-1]>versp:
-            print "  We have a later version!"
-            why += "have later version"
+            print "  Not in database; but we have a later version."
+            why += "obsolete, have latest version"
+            trashdir = "notdb_hv_latest"
         elif len(versnhvs)>0 and versnhvs[-1]>versp:
-            print "  There is a later version which we do not have."
-            why += "do not have the later version"
+            print "  Obsolete; we don't have the latest version."
+            why += "obsolete, do not have the latest version"
+            trashdir = "notdb_donthv_latest"
         else:
-            why += "no later version"
-        print "  versions we have:", vershvs
+            why += "but there is no known later version"
+            trashdir = "notdb_no_later"
+        print "  versions in database which we have:", vershvs
         print "  versions in database, we do not have:", versnhvs
-        listbad(filename, why)
+        mv2trash( filename, dirpath, trashdir, why )
+        #listbad(filename, why)
 
         return False
     status = report[0][0]
     if status>=20 or status<0:
         # It looks like we should keep this.
         vers,verss = existing_versions(filename, abspath, dirpath, engine )  # testing
-        if vers is not None and vers!=verss[0]:
+        if vers is not None and len(verss)>0 and vers!=verss[0]:
             print "abspath version",vers,"is older than",verss[0],"which we also have"
-            listbad(filename, "we have a later version")
+            trashdir = "old_hv_latest"
+            mv2trash( filename, dirpath, trashdir, "we have a later version" )
+            #listbad(filename, "we have a later version")
             return False
         else:
             mv2scratch( filename, dirpath )
             return True
     else:
         print abspath,"status=",status,"\n  size=",os.path.getsize(filepath)
-        listbad(filename,"db status says we do not have it")
+        trashdir = "status10"
+        mv2trash( filename, dirpath, trashdir, "db status says we do not have it" )
+        #listbad(filename,"db status says we do not have it")
         return False
 
 def gc_mvall( scratchdir ):
@@ -183,7 +204,7 @@ def gc_mvall( scratchdir ):
     for scratchdir in sdirs:
         gcdir = scratchdir.replace( '/scratch/', '/scratch/_gc/' )
         print "scratchdir=",scratchdir
-        print "gcdir=",gcdir
+        print "gcdir =",gcdir
         if os.path.isdir(scratchdir):
             if os.path.isdir(gcdir):
                 print "WARNING, gcdir %s already exists,\n will not move from scratchdir %s"%\
@@ -212,6 +233,9 @@ def gc_mvgood( topdir, gcdir ):
         # ...gcdsdir is the root directories for the dataset now in .../scratch/_gc/...
         # Below this directory are ones for versions and variables, and possibly bad? directories
         # for files which failed a checksum.
+        if fac1dir.endswith("withdrawn"):   # leave this facet directory in _gc, all versions
+            # rare, seen for LASG probably it's a name change done by hand
+            continue
         versiondirs = os.listdir( gcdsdir )  # should be version directories e.g. v20120913/
         for versd in versiondirs:
             verspath = os.path.join(gcdsdir,versd)
@@ -320,7 +344,10 @@ def check_facetsdir( topdir, facetsdir ):
             ensfacet = facets[-1]
             matches = re.findall( 'r\d+i\d+p\d+', ensfacet )  # e.g. ['r1i12p2']
             if len(matches)!=1 or matches[0]!=ensfacet:
-                raise Exception("% should be an ensemble facet, doesn't look like one"%ensfacet)
+                matches = re.findall( 'r\d+i\d+p\d+.*withdrawn', ensfacet )  # e.g. ['r1i12p2']
+                if len(matches)==0:
+                    raise Exception("%s should be an ensemble facet, doesn't look like one"%
+                                    ensfacet)
 
     print "Data in the following directories will be cleaned out, with possibly-bad files put"
     print "  in a temporary .../scratch/_gc/... directory:"
@@ -329,9 +356,14 @@ def check_facetsdir( topdir, facetsdir ):
         print "These _gc directories already exist, and any good files in them will be moved to"
         print "regular scratch directories:"
         pprint( gdirs )
-    ok = raw_input("Is this ok? (Type y or n, and newline)")
-    if ok[0]!='y' and ok[0]!='Y':
-        raise Exception("Aborted by user.")
+        print '\n'
+    if len(gdirs)<10:
+        # An interactive check is nice, but less helpful if there are lots of datasets.
+        # It's worse than useless if running under something else (e.g. nohup) but that happens
+        # mainly with a large collection of datasets.
+        ok = raw_input("Is this ok? (Type y or n, and newline)")
+        if ok[0]!='y' and ok[0]!='Y':
+            raise Exception("Aborted by user.")
     return sdirs
 
 def gc( topdir, facetsdir ):
@@ -347,7 +379,7 @@ def gc( topdir, facetsdir ):
     for sdir in sdirs:
         for root, directories, filenames in os.walk(sdir):
             badfiles += filenames
-    print "jfp initially, badfiles=",badfiles,len(badfiles)
+    print "jfp initially, badfiles=",badfiles,len(badfiles),"\n"
 
     gc_mvall( scratchdir )
     gc_mvgood( topdir, gcdir )
