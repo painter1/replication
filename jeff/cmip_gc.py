@@ -23,7 +23,7 @@
 ## dataset's version number.)
 ## It turned out that this aspect of it was equally easy either way.
 # Nevertheless, "moving good data" is superior for two reasons.
-# 1. Most important, the "maybe bad" files are out of the regular dirctory hierarchy,
+# 1. Most important, the "maybe bad" files are out of the regular directory hierarchy,
 # where we can look at them without interfering with normal operations.
 # 2. It makes it simple to reject files which are in the wrong place, i.e. a directory which
 # should have no files.
@@ -100,6 +100,18 @@ def abspath2vers( abspath ):
     else:
         return fdirs[9]
 
+def verskey( verstr ):
+    """Returns an integer key for comparing versions, e.g. 20130512 or 3.
+    The input is a version string, e.g. 'v20130512', '20130512', 'v3', or '3'.
+    There is no checking for whether verstr is a valid version string.
+    Note that the key ensures that single-digit version numbers such as '3' will be less
+    than standard DRS date-based version numbers, which require eight digits."""
+    if verstr[0]=='v':
+        vstr = verstr[1:]
+    else:
+        vstr = verstr
+    return int(vstr)    
+
 def existing_versions( filename, abspath, dirpath, engine ):
     """Identifies existing versions of a file for which the file has been verified.
     This file's version and all the versions are returned; the list of all versions is
@@ -117,7 +129,7 @@ def existing_versions( filename, abspath, dirpath, engine ):
     report = engine.execute(sql.text(sqlst)).fetchall()
     
     verss = [ abspath2vers(ap[0]) for ap in report ]
-    verss.sort(reverse=True)
+    verss.sort(reverse=True,key=verskey)
     if all( map(check_versiondir, verss))==True:
         return vers, verss
     else:
@@ -146,9 +158,7 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     if report==[]:
         why = "not in database, "
         vers = abspath2vers(abspath)
-        if vers[0]=='v':  versp = vers[1:]
-        else:  versp = vers
-        print abspath,"not found in database, size=",os.path.getsize(filepath),"version=",versp
+        print abspath,"not found in database, size=",os.path.getsize(filepath),"version=",vers
 
         # Is another version in the database?
         abspath_anyvers = abspath.replace('/'+vers+'/', '/%/')
@@ -159,13 +169,13 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
         versnhvs = [ abspath2vers(r[0]) for r in report if r[1]<30 ]
         vershvs = list(set([v[1:] if v[0]=='v' else v for v in vershvs]))
         versnhvs = list(set([v[1:] if v[0]=='v' else v for v in versnhvs]))
-        vershvs.sort()
-        versnhvs.sort()
-        if len(vershvs)>0 and vershvs[-1]>versp:
+        vershvs.sort(key=verskey)
+        versnhvs.sort(key=verskey)
+        if len(vershvs)>0 and verskey(vershvs[-1])>verskey(vers):
             print "  Not in database; but we have a later version."
             why += "obsolete, have latest version"
             trashdir = "notdb_hv_latest"
-        elif len(versnhvs)>0 and versnhvs[-1]>versp:
+        elif len(versnhvs)>0 and verskey(versnhvs[-1])>verskey(vers):
             print "  Obsolete; we don't have the latest version."
             why += "obsolete, do not have the latest version"
             trashdir = "notdb_donthv_latest"
@@ -181,8 +191,9 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
     status = report[0][0]
     if status>=20 or status<0:
         # It looks like we should keep this.
-        vers,verss = existing_versions(filename, abspath, dirpath, engine )  # testing
-        if vers is not None and len(verss)>0 and vers!=verss[0]:
+        vers,verss = existing_versions(filename, abspath, dirpath, engine )
+        # Note that existing versions returns verss sorted so the latest is first.
+        if vers is not None and len(verss)>0 and verskey(vers)!=verskey(verss[0]):
             print "abspath version",vers,"is older than",verss[0],"which we also have"
             trashdir = "old_hv_latest"
             mv2trash( filename, dirpath, trashdir, "we have a later version" )
@@ -379,7 +390,9 @@ def gc( topdir, facetsdir ):
     for sdir in sdirs:
         for root, directories, filenames in os.walk(sdir):
             badfiles += filenames
-    print "jfp initially, badfiles=",badfiles,len(badfiles),"\n"
+    print "jfp initially, badfiles=",
+    pprint(badfiles)
+    print "jfp number of badfiles=",len(badfiles),"\n"
 
     gc_mvall( scratchdir )
     gc_mvgood( topdir, gcdir )
