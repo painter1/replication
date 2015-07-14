@@ -51,7 +51,8 @@ whys = { 'good':0,
          'not in database, obsolete, have latest version':0,
          'not in database, obsolete, do not have the latest version':0,
          'we have a later version':0,
-         'db status says we do not have it':0
+         'db status says we do not have it':0,
+         'zero length':0
          }
 
 def listgood( filename ):
@@ -150,6 +151,8 @@ def mvgood2scratch( filename, abspath, dirpath, engine ):
         os.remove(filepath)
         # ...Cleaning nonexistent files out of the database will have to be done anyway.
         # That will be a separate job.
+        listbad(filename,"zero length")
+        return False
 
     # Do the Python equivalent of SELECT status FROM replica.files WHERE abs_path=abspath
     sqlst = "SELECT status FROM replica.files WHERE abs_path='%s';"%abspath
@@ -280,7 +283,7 @@ def gc_mvgood( topdir, gcdir ):
                             mv2scratch( filename, dirpath )
                         if os.path.isdir(filep) and filep.find('bad')==0:
                             for filen in os.listdir(filep):
-                                if os.path.isfile(filep):
+                                if os.path.isfile(filen):
                                     mv2scratch( filename, dirpath )
 
 def delete_empty_dirs( dirwc ):
@@ -368,7 +371,7 @@ def check_facetsdir( topdir, facetsdir ):
         print "regular scratch directories:"
         pprint( gdirs )
         print '\n'
-    if len(gdirs)<10:
+    if len(sdirs)<10 and len(gdirs)<10:
         # An interactive check is nice, but less helpful if there are lots of datasets.
         # It's worse than useless if running under something else (e.g. nohup) but that happens
         # mainly with a large collection of datasets.
@@ -397,8 +400,11 @@ def gc( topdir, facetsdir ):
     gc_mvall( scratchdir )
     gc_mvgood( topdir, gcdir )
     delete_empty_dirs( os.path.join(topdir,'scratch/_gc/') )
-    print "good files, in /scratch/:", goodfiles, len(goodfiles)
-    print "bad files, in /scratch/_gc/:", badfiles, len(badfiles)
+    print len(goodfiles), "good files, in /scratch/:"
+    pprint( goodfiles )
+    print len(badfiles), "bad files, in /scratch/_gc/:"
+    pprint( badfiles )
+    print len(goodfiles),"good files; ",len(badfiles),"bad files."
     print "reasons for files being good or bad:"
     pprint( whys )
 
