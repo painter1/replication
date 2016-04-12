@@ -6,7 +6,7 @@
 
 # Before running this script, do a harvest (ingest) and run a verify to update the replication
 # database before running this script.  The reason is that this script is based on comparing a file
-# with entries int he database.  In particular, it rejects any data not listed in the database.
+# with entries in the database.  In particular, it rejects any data not listed in the database.
 
 # This script requires data to be organized as unpublished data usually is organized on CSS
 # at PCMDI.
@@ -16,12 +16,6 @@
 
 # This could be implemented either by moving bad data or by moving good data.
 # There's not a big difference in performance or coding between the two.
-## I originally decided to do it by moving good data because there is a kind of status propagation
-## which I thought may turn out to be easier to implement this way.  If anything in a dataset is
-## "good", i.e. in the database, then probably everything else in the dataset should be made good,
-## i.e. added to the dataset (But rarely a file may have been withdrawn without updating the
-## dataset's version number.)
-## It turned out that this aspect of it was equally easy either way.
 # Nevertheless, "moving good data" is superior for two reasons.
 # 1. Most important, the "maybe bad" files are out of the regular directory hierarchy,
 # where we can look at them without interfering with normal operations.
